@@ -2,6 +2,8 @@
 
 A real-time synchronized YouTube video watching experience with WebRTC-based chat.
 
+[**Live Demo**](https://watch-together-10qm.onrender.com)
+
 ## Features
 
 - **Synchronized YouTube Playback**: Play, pause, and seek videos in perfect sync between two users
@@ -48,3 +50,11 @@ A real-time synchronized YouTube video watching experience with WebRTC-based cha
 - **Frontend**: HTML, CSS, JavaScript, YouTube IFrame API, WebRTC
 - **Backend**: Node.js, Express, Socket.io
 - **Real-time**: WebRTC for P2P data channels and video sync
+
+- ## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+## Authors
+
+- [YUVRAJ SHARMA](https://github.com/Uvofficiall)
