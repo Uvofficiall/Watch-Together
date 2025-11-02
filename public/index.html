@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch Together</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #1a1a1a; color: white; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .main-content { display: flex; gap: 20px; }
+        .video-section { flex: 2; }
+        .chat-section { flex: 1; background: #2a2a2a; border-radius: 8px; padding: 15px; }
+        .url-input { width: 100%; padding: 10px; margin-bottom: 15px; border: none; border-radius: 4px; }
+        .connect-btn { background: #ff4444; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-bottom: 15px; }
+        .connect-btn:hover { background: #cc3333; }
+        .connect-btn:disabled { background: #666; cursor: not-allowed; }
+        #player { width: 100%; height: 400px; background: #000; border: 1px solid #444; }
+        .chat-messages { height: 300px; overflow-y: auto; border: 1px solid #444; padding: 10px; margin-bottom: 10px; background: #1a1a1a; }
+        .message { margin-bottom: 8px; padding: 5px; border-radius: 4px; background: #333; }
+        .message-time { font-size: 0.8em; color: #888; }
+        .chat-input { width: 100%; padding: 8px; border: none; border-radius: 4px; }
+        .status { padding: 10px; background: #333; border-radius: 4px; margin-bottom: 15px; text-align: center; }
+        .room-info { background: #444; padding: 10px; border-radius: 4px; margin-bottom: 15px; }
+        .navbar-content { max-width: 1200px; margin: 0 auto; display: flex; justify-content: center; gap: 30px; }
+        .nav-item { color: white; text-decoration: none; padding: 8px 16px; border-radius: 4px; transition: background 0.3s; }
+        .nav-item:hover { background: #555; }
+        .footer { background: #222; padding: 20px 0; text-align: center; color: #888; margin-top: 30px; }
+        .top-navbar { background: #333; padding: 15px 0; }
+        .top-navbar .navbar-content { margin-bottom: 0; }
+    </style>
+</head>
+<body>
+    <div class="top-navbar">
+        <div class="navbar-content">
+            <a href="#" class="nav-item">🏠 Home</a>
+            <a href="#" class="nav-item">📹 Videos</a>
+            <a href="#" class="nav-item">💬 Chat</a>
+            <a href="#" class="nav-item">⚙️ Settings</a>
+            <a href="#" class="nav-item">ℹ️ About</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>Watch Together</h1>
+        </div>
+        
+        <div class="room-info">
+            <label>Your Name: </label>
+            <input type="text" id="nameInput" placeholder="Enter your name" style="padding: 5px; margin: 0 10px;">
+            <br><br>
+            <label>Room ID: </label>
+            <input type="text" id="roomInput" placeholder="Enter room ID or leave empty for random" style="padding: 5px; margin: 0 10px;">
+            <button id="createRoomBtn" class="connect-btn">Create Room</button>
+            <button id="joinRoomBtn" class="connect-btn">Join Room</button>
+            <div id="roomStatus"></div>
+        </div>
+
+        <div class="main-content">
+            <div class="video-section">
+                <input type="text" id="youtubeUrl" class="url-input" placeholder="Paste YouTube URL here...">
+                <button id="loadVideoBtn" class="connect-btn">Load Video</button>
+                <button id="connectBtn" class="connect-btn" disabled>Connect to Peer</button>
+                <div class="status" id="status">Enter a room to start</div>
+                <div id="player"></div>
+            </div>
+
+            <div class="chat-section">
+                <h3>Chat</h3>
+                <div class="video-chat">
+                    <div style="margin-bottom: 10px;">
+                        <h4 style="margin-bottom: 5px; font-size: 14px;">You</h4>
+                        <video id="localVideo" width="100%" height="120" autoplay muted style="border-radius: 4px; background: #000; border: 2px solid #444;"></video>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <h4 style="margin-bottom: 5px; font-size: 14px;">Peer</h4>
+                        <video id="remoteVideo" width="100%" height="120" autoplay style="border-radius: 4px; background: #000; border: 2px solid #444; display: none;"></video>
+                        <div id="peerVideoPlaceholder" style="width: 100%; height: 120px; background: #333; border-radius: 4px; border: 2px solid #444; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px;">Waiting for peer video...</div>
+                    </div>
+                    <button id="toggleCamera" class="connect-btn" style="width: 100%; margin-bottom: 10px;">📹 Turn On Camera</button>
+                </div>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-controls">
+                    <input type="text" id="chatInput" class="chat-input" placeholder="Type a message..." disabled style="width: 75%; display: inline-block;">
+                    <button id="sendBtn" class="connect-btn" style="width: 20%; margin-left: 5px;">➤ Send</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>&copy; 2025 Watch Together - Synchronized YouTube Experience</p>
+            <p>Built with WebRTC & Socket.io</p>
+        </div>
+    </div>
+
+
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Load YouTube API
+        var tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    </script>
+    <script src="script.js"></script>
+</body>
+</html>
