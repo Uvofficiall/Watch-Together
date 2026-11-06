@@ -97,6 +97,7 @@ class WatchTogether {
         this.dataChannel = null;
         this.iceCandidateQueue = [];
         this.makingOffer = false;
+        this.remoteStream = null;
         this.setupWebRTC();
     }
 
@@ -117,7 +118,6 @@ class WatchTogether {
 
         this.socket.on('peer-joined', (data) => {
             console.log('Peer joined:', data);
-            // If data is provided by updated server, use it. Otherwise first joiner is initiator.
             this.isInitiator = data ? !!data.isInitiator : true;
             this.isPolite = !this.isInitiator;
             this.roomStatus.textContent = `Both users connected in room: ${this.roomId}!`;
@@ -161,7 +161,7 @@ class WatchTogether {
             this.resetPeerConnection();
         });
 
-        // Socket.io relay fallbacks (for when WebRTC data channel is negotiating or restricted)
+        // Socket.io relay fallbacks
         this.socket.on('chat-message', (data) => {
             if (this.isDuplicateMessage(data.msgId)) return;
             this.displayMessage(data.username, data.message, data.timestamp);
@@ -179,7 +179,7 @@ class WatchTogether {
 
         this.socket.on('camera-toggle', (data) => {
             if (data.type === 'camera-on') {
-                this.peerVideoPlaceholder.textContent = 'Waiting for peer video...';
+                this.peerVideoPlaceholder.textContent = 'Connecting peer video...';
             } else if (data.type === 'camera-off') {
                 this.remoteVideo.style.display = 'none';
                 this.peerVideoPlaceholder.style.display = 'flex';
@@ -233,29 +233,53 @@ class WatchTogether {
         };
 
         this.peerConnection.ontrack = (event) => {
-            console.log('Received remote track:', event.track.kind);
-            let stream = event.streams && event.streams[0];
-            if (!stream) {
+            console.log('Received remote track:', event.track.kind, event.streams);
+            let stream = null;
+            if (event.streams && event.streams[0]) {
+                stream = event.streams[0];
+                this.remoteStream = stream;
+            } else {
                 if (!this.remoteStream) {
                     this.remoteStream = new MediaStream();
                 }
                 this.remoteStream.addTrack(event.track);
                 stream = this.remoteStream;
-            } else {
-                this.remoteStream = stream;
             }
 
-            this.remoteVideo.srcObject = stream;
+            if (this.remoteVideo.srcObject !== stream) {
+                this.remoteVideo.srcObject = stream;
+            }
+
             this.remoteVideo.style.display = 'block';
             this.peerVideoPlaceholder.style.display = 'none';
 
+            const playPromise = this.remoteVideo.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(err => {
+                    console.warn('Autoplay notice (muting to allow video):', err);
+                    this.remoteVideo.muted = true;
+                    this.remoteVideo.play().catch(e => console.error('Play retry error:', e));
+                });
+            }
+
             event.track.onended = () => {
-                if (this.remoteStream && this.remoteStream.getTracks().every(t => t.readyState === 'ended')) {
-                    this.remoteVideo.style.display = 'none';
-                    this.peerVideoPlaceholder.style.display = 'flex';
-                    this.peerVideoPlaceholder.textContent = 'Peer camera is off';
+                console.log('Remote track ended:', event.track.kind);
+                if (this.remoteStream) {
+                    const activeTracks = this.remoteStream.getTracks().filter(t => t.readyState === 'live');
+                    if (activeTracks.length === 0) {
+                        this.remoteVideo.style.display = 'none';
+                        this.peerVideoPlaceholder.style.display = 'flex';
+                        this.peerVideoPlaceholder.textContent = 'Peer camera is off';
+                    }
                 }
             };
+        };
+
+        this.peerConnection.onnegotiationneeded = async () => {
+            if (!this.roomId) return;
+            if (this.peerConnection.signalingState !== 'stable') return;
+            console.log('onnegotiationneeded fired, renegotiating session...');
+            await this.renegotiate();
         };
 
         this.peerConnection.onconnectionstatechange = () => {
@@ -290,7 +314,7 @@ class WatchTogether {
             }
         };
 
-        // Attach existing local camera stream tracks if active
+        // Attach existing local camera stream tracks if already active
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
                 this.peerConnection.addTrack(track, this.localStream);
@@ -307,7 +331,9 @@ class WatchTogether {
         try {
             this.connectBtn.disabled = true;
             this.connectBtn.textContent = 'Connecting...';
-            this.status.textContent = 'Connecting to peer...';
+            if (this.peerConnection.connectionState !== 'connected') {
+                this.status.textContent = 'Connecting to peer...';
+            }
 
             if (!this.peerConnection || 
                 this.peerConnection.connectionState === 'closed' || 
@@ -334,7 +360,9 @@ class WatchTogether {
                 }
             });
             
-            this.status.textContent = 'Offer sent, establishing connection...';
+            if (this.peerConnection.connectionState !== 'connected') {
+                this.status.textContent = 'Offer sent, establishing connection...';
+            }
         } catch (error) {
             console.error('Error initiating connection:', error);
             this.status.textContent = 'Connected via Relay. You can chat & sync!';
@@ -345,10 +373,37 @@ class WatchTogether {
         }
     }
 
+    async renegotiate() {
+        if (!this.peerConnection || !this.roomId) return;
+        if (this.makingOffer || this.peerConnection.signalingState !== 'stable') {
+            console.log('Skipping renegotiation: busy or not stable', this.peerConnection.signalingState);
+            return;
+        }
+
+        try {
+            console.log('Starting WebRTC renegotiation offer for video/audio tracks...');
+            this.makingOffer = true;
+            const offer = await this.peerConnection.createOffer();
+            await this.peerConnection.setLocalDescription(offer);
+
+            this.socket.emit('offer', {
+                roomId: this.roomId,
+                offer: {
+                    type: offer.type,
+                    sdp: offer.sdp
+                }
+            });
+            console.log('Renegotiation offer sent to peer');
+        } catch (err) {
+            console.error('Error during renegotiation:', err);
+        } finally {
+            this.makingOffer = false;
+        }
+    }
+
     async handleOffer(offer) {
         if (!offer || !offer.sdp) return;
         try {
-            // Collision handling (Perfect Negotiation pattern)
             const isCollision = this.makingOffer || this.peerConnection.signalingState !== 'stable';
             
             if (isCollision) {
@@ -377,7 +432,9 @@ class WatchTogether {
             // Process queued candidates after both remoteDescription and localDescription are set!
             await this.processIceQueue();
 
-            this.status.textContent = 'Connecting to peer...';
+            if (this.peerConnection.connectionState !== 'connected') {
+                this.status.textContent = 'Connecting to peer...';
+            }
         } catch (error) {
             console.error('Error handling offer:', error);
             this.status.textContent = 'Connected via Relay. You can chat & sync!';
@@ -396,7 +453,7 @@ class WatchTogether {
             const answerDesc = new RTCSessionDescription(answer);
             await this.peerConnection.setRemoteDescription(answerDesc);
             
-            // Process queued candidates after remote description is set on initiator
+            // Process queued candidates after remote description is set
             await this.processIceQueue();
         } catch (error) {
             console.error('Error handling answer:', error);
@@ -406,7 +463,6 @@ class WatchTogether {
     async handleIceCandidate(candidate) {
         if (!candidate) return;
 
-        // Extract candidate dictionary if nested
         const cand = (candidate.candidate && typeof candidate.candidate === 'object')
             ? candidate.candidate
             : candidate;
@@ -414,13 +470,11 @@ class WatchTogether {
         if (!cand) return;
 
         try {
-            // Only add candidate directly if both remoteDescription and localDescription are set
             if (this.peerConnection && 
                 this.peerConnection.remoteDescription && 
                 this.peerConnection.localDescription) {
                 await this.peerConnection.addIceCandidate(cand);
             } else {
-                // Otherwise queue until descriptions are ready
                 this.iceCandidateQueue.push(cand);
             }
         } catch (error) {
@@ -488,7 +542,7 @@ class WatchTogether {
                     this.peerVideoPlaceholder.style.display = 'flex';
                     this.peerVideoPlaceholder.textContent = 'Peer camera is off';
                 } else if (data.type === 'camera-on') {
-                    this.peerVideoPlaceholder.textContent = 'Waiting for peer video...';
+                    this.peerVideoPlaceholder.textContent = 'Connecting peer video...';
                 }
             } catch (error) {
                 console.error('Error parsing data channel message:', error);
@@ -516,7 +570,6 @@ class WatchTogether {
 
         this.recentMessageIds.add(msgId);
 
-        // Send via WebRTC data channel if open, otherwise fallback to Socket.io relay
         let sent = false;
         if (this.dataChannel && this.dataChannel.readyState === 'open') {
             try {
@@ -586,7 +639,6 @@ class WatchTogether {
 
         this.recentMessageIds.add(msgId);
 
-        // Send via data channel if open, else socket relay
         let sent = false;
         if (this.dataChannel && this.dataChannel.readyState === 'open') {
             try {
@@ -603,7 +655,6 @@ class WatchTogether {
     }
 
     extractVideoId(url) {
-        // Direct 11-char ID
         if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
             return url;
         }
@@ -675,7 +726,6 @@ class WatchTogether {
 
         const state = event.data;
         
-        // Only sync on play, pause, and buffering states
         if (state === YT.PlayerState.PLAYING || 
             state === YT.PlayerState.PAUSED || 
             state === YT.PlayerState.BUFFERING) {
@@ -722,7 +772,6 @@ class WatchTogether {
             const currentTime = this.player.getCurrentTime();
             const timeDiff = Math.abs(currentTime - data.currentTime);
             
-            // Sync time if difference is significant (>1.5 second)
             if (timeDiff > 1.5) {
                 this.player.seekTo(data.currentTime, true);
             }
@@ -772,6 +821,9 @@ class WatchTogether {
                     this.localStream.getTracks().forEach(track => {
                         this.peerConnection.addTrack(track, this.localStream);
                     });
+
+                    // Trigger renegotiation so peer receives the tracks
+                    await this.renegotiate();
                 }
 
                 const data = { type: 'camera-on', roomId: this.roomId };
@@ -787,7 +839,7 @@ class WatchTogether {
                 }
             } catch (error) {
                 console.error('Error accessing camera:', error);
-                alert('Could not access camera. Please check camera permissions.');
+                alert('Could not access camera. Please check camera permissions in your browser.');
             }
         } else {
             if (this.localStream) {
@@ -804,6 +856,9 @@ class WatchTogether {
                         }
                         track.stop();
                     });
+
+                    // Renegotiate removal of tracks
+                    await this.renegotiate();
                 } else {
                     this.localStream.getTracks().forEach(track => track.stop());
                 }
@@ -812,9 +867,6 @@ class WatchTogether {
             }
             this.cameraEnabled = false;
             this.toggleCamera.textContent = '📹 Turn On Camera';
-            this.remoteVideo.style.display = 'none';
-            this.peerVideoPlaceholder.style.display = 'flex';
-            this.peerVideoPlaceholder.textContent = 'Peer camera is off';
 
             const data = { type: 'camera-off', roomId: this.roomId };
             if (this.dataChannel && this.dataChannel.readyState === 'open') {
