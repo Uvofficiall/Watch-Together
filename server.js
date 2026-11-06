@@ -20,13 +20,27 @@ io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join-room', (roomId) => {
+    if (!roomId) return;
+
+    // Leave any previous room
+    if (socket.roomId && socket.roomId !== roomId && rooms.has(socket.roomId)) {
+      const prevRoom = rooms.get(socket.roomId);
+      prevRoom.delete(socket.id);
+      socket.leave(socket.roomId);
+      if (prevRoom.size === 0) {
+        rooms.delete(socket.roomId);
+      } else {
+        socket.to(socket.roomId).emit('peer-disconnected');
+      }
+    }
+
     if (!rooms.has(roomId)) {
       rooms.set(roomId, new Set());
     }
     
     const room = rooms.get(roomId);
     
-    if (room.size >= 2) {
+    if (!room.has(socket.id) && room.size >= 2) {
       socket.emit('room-full');
       return;
     }
@@ -38,21 +52,61 @@ io.on('connection', (socket) => {
     socket.emit('joined-room', roomId);
     
     if (room.size === 2) {
-      socket.to(roomId).emit('peer-joined');
-      socket.emit('peer-joined');
+      // First user who was waiting in the room becomes initiator
+      socket.to(roomId).emit('peer-joined', { isInitiator: true });
+      // Second user who just joined is receiver
+      socket.emit('peer-joined', { isInitiator: false });
     }
   });
 
   socket.on('offer', (data) => {
-    socket.to(data.roomId).emit('offer', data.offer);
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('offer', data.offer);
+    }
   });
 
   socket.on('answer', (data) => {
-    socket.to(data.roomId).emit('answer', data.answer);
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('answer', data.answer);
+    }
   });
 
   socket.on('ice-candidate', (data) => {
-    socket.to(data.roomId).emit('ice-candidate', data.candidate);
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('ice-candidate', data.candidate);
+    }
+  });
+
+  // Relay fallbacks for chat, video sync, video load, and camera events
+  socket.on('chat-message', (data) => {
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('chat-message', data);
+    }
+  });
+
+  socket.on('video-sync', (data) => {
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('video-sync', data);
+    }
+  });
+
+  socket.on('video-load', (data) => {
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('video-load', data);
+    }
+  });
+
+  socket.on('camera-toggle', (data) => {
+    const roomId = (data && data.roomId) || socket.roomId;
+    if (roomId) {
+      socket.to(roomId).emit('camera-toggle', data);
+    }
   });
 
   socket.on('disconnect', () => {
